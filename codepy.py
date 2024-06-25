@@ -1,61 +1,81 @@
+import numpy as np
+
 import mesa
 import matplotlib.pyplot as plt
 
+
 class EmployeeAgent(mesa.Agent):
     """Represents employees in the Gym"""
+
     def __init__(self, unique_id: int, model: mesa.Model) -> None:
         super().__init__(unique_id, model)
 
     def step(self) -> None:
         # Move randomly within the gym to an empty cell
         possible_steps = self.model.grid.get_neighborhood(
-            self.pos,
-            moore=True,
-            include_center=False
+            self.pos, moore=True, include_center=False
         )
-        empty_steps = [step for step in possible_steps if self.model.grid.is_cell_empty(step)]
-        
+        empty_steps = [
+            step for step in possible_steps if self.model.grid.is_cell_empty(step)
+        ]
+
         if empty_steps:
             new_position = self.random.choice(empty_steps)
             self.model.grid.move_agent(self, new_position)
-        
+
         # Check for benches and reset weights
         cellmates = self.model.grid.get_cell_list_contents([self.pos])
         for mate in cellmates:
             if isinstance(mate, GymAttendeeAgent):
                 mate.reset_weights()
-                self.model.incorrectly_placed_weights -= 1  # Decrease incorrectly placed weights
+                self.model.incorrectly_placed_weights -= (
+                    1  # Decrease incorrectly placed weights
+                )
 
 
 class GymAttendeeAgent(mesa.Agent):
     """Represents gym goers"""
+
     def __init__(self, unique_id: int, model: mesa.Model) -> None:
         super().__init__(unique_id, model)
         self.equipment_checklist = self.generate_checklist()
         self.reset_chance = self.model.reset_chance
+        self.fix_chance = self.model.fix_chance
 
     def generate_checklist(self):
         # Create a checklist of equipment to visit
+        # FIXME this we want to be kind of random
         return ["bench", "treadmill", "weights"]
 
     def step(self) -> None:
         # Move randomly within the gym to an empty cell
         possible_steps = self.model.grid.get_neighborhood(
-            self.pos,
-            moore=True,
-            include_center=False
+            self.pos, moore=True, include_center=False
         )
-        empty_steps = [step for step in possible_steps if self.model.grid.is_cell_empty(step)]
-        
+        empty_steps = [
+            step for step in possible_steps if self.model.grid.is_cell_empty(step)
+        ]
+
         if empty_steps:
             new_position = self.random.choice(empty_steps)
             self.model.grid.move_agent(self, new_position)
-        
+
         # Use equipment and possibly not reset it
         if self.equipment_checklist:
             current_equipment = self.equipment_checklist.pop()
             if self.random.random() > self.reset_chance:
                 self.model.incorrectly_placed_weights += 1
+
+            if self.random.random() < self.fix_chance:
+                self.model.incorrectly_placed_weights -= 1
+
+        else:
+            self.leave()
+
+    def leave(self):
+        self.model.attendees.remove(self)
+        self.model.grid.remove_agent(self)
+        self.model.schedule.remove(self)
 
     def reset_weights(self):
         # Decrease the incorrectly placed weights count
@@ -66,24 +86,34 @@ class GymAttendeeAgent(mesa.Agent):
 def compute_incorrectly_placed_weights(model):
     return model.incorrectly_placed_weights
 
+
 def compute_probability_of_correctly_placing_weights(model):
     total_checks = model.num_attendees * model.checklist_length
     if total_checks == 0:
         return 1  # No equipment used, so "perfect" placement
     return 1 - model.incorrectly_placed_weights / total_checks
 
+
 def compute_employee_coverage(model):
     # Calculate the average distance from each attendee to the nearest employee
     distances = []
     for agent in model.schedule.agents:
         if isinstance(agent, GymAttendeeAgent):
-            min_distance = min([manhattan_distance(agent.pos, emp.pos) for emp in model.schedule.agents if isinstance(emp, EmployeeAgent)])
+            min_distance = min(
+                [
+                    manhattan_distance(agent.pos, emp.pos)
+                    for emp in model.schedule.agents
+                    if isinstance(emp, EmployeeAgent)
+                ]
+            )
             distances.append(min_distance)
     return sum(distances) / len(distances) if distances else 0
+
 
 def manhattan_distance(pos1, pos2):
     """Calculate the Manhattan distance between two points."""
     return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
 
 def compute_gym_entropy(model):
     """Calculate the gym entropy based on incorrectly placed weights."""
@@ -92,15 +122,36 @@ def compute_gym_entropy(model):
         return 0  # No equipment used, so no entropy
     return model.incorrectly_placed_weights / total_checks
 
+
+def compute_number_of_agents(model):
+    return len(model.attendees)
+
+
 class GymModel(mesa.Model):
     """A representation of the Gym"""
-    def __init__(self, num_employees, num_attendees, gym_width, gym_depth, reset_chance) -> None:
+
+    def __init__(
+        self,
+        num_employees,
+        num_attendees,
+        gym_width,
+        gym_depth,
+        reset_chance,
+        fix_chance,
+        attendee_lambda,
+    ) -> None:
         super().__init__()
         self.num_employees = num_employees
         self.num_attendees = num_attendees
         self.grid = mesa.space.SingleGrid(gym_width, gym_depth, False)
         self.reset_chance = reset_chance
+        self.fix_chance = fix_chance
         self.checklist_length = len(GymAttendeeAgent(0, self).generate_checklist())
+        self.attendees = []
+        self.attendee_lambda = attendee_lambda
+        # self.employees = []
+
+        self.time = 0
 
         self.schedule = mesa.time.RandomActivation(self)
         self.incorrectly_placed_weights = 0
@@ -111,14 +162,16 @@ class GymModel(mesa.Model):
 
         for j in range(self.num_attendees):
             a = GymAttendeeAgent(j + self.num_employees, self)
+            self.attendees.append(a)
             self.place_agent_in_empty_cell(a)
 
         self.datacollector = mesa.DataCollector(
             model_reporters={
-                "IncWeightPlacements": compute_incorrectly_placed_weights, 
-                "EmpCoverage": compute_employee_coverage, 
+                "IncWeightPlacements": compute_incorrectly_placed_weights,
+                "EmpCoverage": compute_employee_coverage,
                 "EmpericalWeightPlacementProbability": compute_probability_of_correctly_placing_weights,
-                "GymEntropy": compute_gym_entropy
+                "GymEntropy": compute_gym_entropy,
+                "NrAgents": compute_number_of_agents,
             }
         )
 
@@ -133,8 +186,20 @@ class GymModel(mesa.Model):
 
     def step(self):
         """Advance the model by one step"""
+        self.time += 1
+
+        new_attendees = np.random.poisson(self.attendee_lambda)
+        for _ in range(new_attendees):
+            self.new_gym_attendee()
+
         self.schedule.step()
         self.datacollector.collect(self)
+
+    def new_gym_attendee(self):
+        a = GymAttendeeAgent(self.attendees[-1].unique_id + 1, self)
+        self.attendees.append(a)
+        self.place_agent_in_empty_cell(a)
+
 
 # Function to plot gym entropy over time
 def plot_gym_entropy(data):
@@ -146,10 +211,13 @@ def plot_gym_entropy(data):
     plt.legend()
     plt.show()
 
+
 # Example of initializing and running the model for 1000 steps
-#(self, num_employees, num_attendees, gym_width, gym_depth, reset_chance)
-starter_model = GymModel(10, 50, 20, 20, reset_chance=0.9)
-for i in range(50):
+# (self, num_employees, num_attendees, gym_width, gym_depth, reset_chance)
+starter_model = GymModel(
+    2, 10, 20, 20, reset_chance=0.9, fix_chance=0.05, attendee_lambda=4
+)
+for i in range(100):
     starter_model.step()
 
 # Accessing collected data
