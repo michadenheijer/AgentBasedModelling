@@ -275,8 +275,21 @@ results = mesa.batch_run(
         "num_attendees": [10],
         "gym_width": [20],
         "gym_depth": [20],
-        "base_incorrect_placement_chance": [0.05, 0.1, 0.2, 0.3, 0.4],
-        "environment_effect": [0.1, 0.2, 0.3, 0.4, 0.5],
+        "base_incorrect_placement_chance": [0.05, 0.1, 0.2, 0.3, 0.4, 0.5],
+        "environment_effect": [
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.6,
+            0.7,
+            0.8,
+            0.9,
+            1,
+            1.1,
+            1.2,
+        ],
         "attendee_lambda": [4],
         "weights": [50],
         "benches": [10],
@@ -284,12 +297,13 @@ results = mesa.batch_run(
     1,
     iterations=10,
     data_collection_period=1,
-    max_steps=1000,
+    max_steps=100,
 )
 
 results_df = pd.DataFrame(results)
 gym_entropy_results = (
-    results_df.groupby(["base_incorrect_placement_chance", "environment_effect"])
+    results_df[results_df["Step"] > 15]
+    .groupby(["base_incorrect_placement_chance", "environment_effect"])
     .mean()["GymEntropy"]
     .unstack()
     .transpose()
